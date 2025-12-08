@@ -2,6 +2,7 @@ import gymnasium as gym
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle
+import argparse
 
 
 def print_success_rate(rewards_per_episode):
@@ -23,10 +24,10 @@ def run(episodes, is_training=True, render=False):
         q = pickle.load(f)
         f.close()
 
-    learning_rate_a = 0.9 # alpha or learning rate
-    discount_factor_g = 0.9 # gamma or discount rate. Near 0: more weight/reward placed on immediate state. Near 1: more on future state.
+    learning_rate_a = 0.034755 # alpha or learning rate
+    discount_factor_g = 0.983 # gamma or discount rate. Near 0: more weight/reward placed on immediate state. Near 1: more on future state.
     epsilon = 1         # 1 = 100% random actions
-    epsilon_decay_rate = 0.0001        # epsilon decay rate. 1/0.0001 = 10,000
+    epsilon_decay_rate = 0.000096        # epsilon decay rate. 1/0.0001 = 10,000
     rng = np.random.default_rng()   # random number generator
 
     rewards_per_episode = np.zeros(episodes)
@@ -54,7 +55,7 @@ def run(episodes, is_training=True, render=False):
         epsilon = max(epsilon - epsilon_decay_rate, 0)
 
         if(epsilon==0):
-            learning_rate_a = 0.0001
+            learning_rate_a = 0.001
 
         if reward == 1:
             rewards_per_episode[i] = 1
@@ -74,8 +75,13 @@ def run(episodes, is_training=True, render=False):
         f = open("frozen_lake8x8.pkl","wb")
         pickle.dump(q, f)
         f.close()
+        print_success_rate(rewards_per_episode[-1000:])
 
 if __name__ == '__main__':
-    # run(15000, is_training=True, render=False)
-
-    run(10, is_training=False, render=True)
+    parser = argparse.ArgumentParser(description="Frozen Lake Agent Runner")
+    parser.add_argument('--train', action='store_true', help='Run in training mode')
+    args = parser.parse_args()
+    if args.train:
+        run(15000, is_training=True, render=False)
+    else:
+        run(3000, is_training=False, render=False)
