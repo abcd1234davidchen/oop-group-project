@@ -3,10 +3,13 @@ import env_2048
 import agent_2048
 import numpy as np
 import time
+import argparse
+import tqdm
 
 def train(env, agent, episodes=100):
     print(f"Starting training for {episodes} episodes...")
-    for episode in range(episodes):
+    pbar = tqdm(range(episodes), desc="Training", unit="ep")
+    for episode in pbar:
         state, info = env.reset()
         total_reward = 0
         done = False
@@ -52,11 +55,16 @@ def test(env, agent, episodes=5):
         print(f"Test Episode {episode + 1}, Score: {total_reward}, Max Tile: {np.max(state)}")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--action', type=str, default='mix', choices=['train', 'test', 'mix'], help='Action: train, test, or mix')
+    parser.add_argument('--train_episodes', type=int, default=10000, help='Number of training episodes')
+    parser.add_argument('--test_episodes', type=int, default=5, help='Number of testing episodes')
+    args = parser.parse_args()
     # 1. Train
     env = gym.make('2048-v0', render_mode=None)
     agent = agent_2048.DQNAgent(grid_size=4, action_space_n=env.action_space.n, epsilon_decay=0.999)
     
-    train(env, agent, episodes=10000) # Short training for demonstration
+    train(env, agent, episodes=args.train_episodes) # Short training for demonstration
     
     # Save agent
     agent.save("dqn_2048.pth")
