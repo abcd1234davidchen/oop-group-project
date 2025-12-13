@@ -31,26 +31,46 @@ class RandomAgent(BaseAgent):
                  return int(random.choice(valid_actions))
         return self.action_space.sample()
 
+# I need further examination on conv portion
 class QNetwork(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, output_dim)
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=2, stride=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=2, stride=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, output_dim)
+        )
         
     def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        return self.fc3(x)
+        x = self.conv(x)
+        x = x.view(x.size(0), -1)
+        return self.fc(x)
 
 class ReplayBuffer:
     def __init__(self, capacity):
-        self.buffer = collections.deque(maxlen=capacity)
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
 
     def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        
+        # Overwrite memory at the current pointer (Circular Buffer)
+        self.buffer[self.position] = (state, action, reward, next_state, done)
+        self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size):
+        # Random access in a list is INSTANT (O(1))
         batch = random.sample(self.buffer, batch_size)
         state, action, reward, next_state, done = zip(*batch)
         return state, action, reward, next_state, done
@@ -68,7 +88,8 @@ class DQNAgent(BaseAgent):
         self.epsilon_min = epsilon_end
         self.epsilon_decay = epsilon_decay
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {self.device}")
         
         self.q_net = QNetwork(self.input_dim, action_space_n).to(self.device)
         self.target_net = QNetwork(self.input_dim, action_space_n).to(self.device)
@@ -76,8 +97,8 @@ class DQNAgent(BaseAgent):
         self.target_net.eval()
         
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
-        self.memory = ReplayBuffer(10000)
-        self.batch_size = 64
+        self.memory = ReplayBuffer(50000)
+        self.batch_size = 1024
         self.target_update_freq = 100
         self.steps_done = 0
 
@@ -85,10 +106,10 @@ class DQNAgent(BaseAgent):
         # Flatten and log2 transform
         # Add a small epsilon to avoid log2(0)
         # obs is numpy array
-        obs_flat = observation.flatten()
         # Use log2 to scale values: log2(0+1)=0, log2(2)=1, log2(4)=2...
-        obs_log = np.log2(np.maximum(obs_flat, 1))
-        return torch.FloatTensor(obs_log).unsqueeze(0).to(self.device)
+        obs_log = np.log2(np.maximum(observation, 1))
+        tensor = torch.FloatTensor(obs_log).unsqueeze(0).unsqueeze(0)
+        return tensor.to(self.device)
 
     def act(self, observation, action_mask=None):
         if random.random() < self.epsilon:
@@ -111,6 +132,85 @@ class DQNAgent(BaseAgent):
                     q_values[0, ~mask_tensor] = -1e9
                 
                 return q_values.argmax().item()
+        
+    def act_batch(self, observations, action_masks=None):
+        """
+        Selects actions for a batch of environments (Vectorized).
+        
+        Args:
+            observations: Numpy array of shape (Batch_Size, 4, 4)
+            action_masks: Optional Numpy array of shape (Batch_Size, 4)
+            
+        Returns:
+            Numpy array of shape (Batch_Size,) containing actions (int)
+        """
+        batch_size = len(observations)
+        actions = np.zeros(batch_size, dtype=int)
+        
+        # 1. Determine which agents will explore (Random) vs exploit (Greedy)
+        # We generate a list of random numbers, one for each game
+        explore_flags = np.random.random(batch_size) < self.epsilon
+        
+        # --- PATH A: GREEDY ACTIONS (The Neural Network) ---
+        # We run the network for EVERYONE first (it's faster to batch 32 than split them)
+        with torch.no_grad():
+            self.q_net.eval()
+            
+            # Preprocess the whole batch at once: (32, 4, 4) -> (32, 1, 4, 4)
+            obs_log = np.log2(np.maximum(observations, 1))
+            obs_log = np.expand_dims(obs_log, axis=1)
+            state_tensor = torch.FloatTensor(obs_log).to(self.device)
+            
+            # Forward Pass
+            q_values = self.q_net(state_tensor) # Shape: (32, 4)
+            
+            # Apply Masks (if provided)
+            if action_masks is not None:
+                # Convert mask to Tensor (True = Valid, False = Invalid)
+                mask_tensor = torch.BoolTensor(action_masks).to(self.device)
+                # Set invalid actions to -infinity so argmax never picks them
+                # Note: We use ~mask_tensor because typically mask=1 means valid
+                # If your mask logic is 0=valid, remove the ~
+                q_values[~mask_tensor] = -1e9
+                
+            # Select best actions
+            greedy_actions = q_values.argmax(dim=1).cpu().numpy()
+            self.q_net.train()
+
+        # --- PATH B: RANDOM ACTIONS ---
+        # For the games that decided to explore, overwrite the greedy action with a random one
+        if np.any(explore_flags):
+            for i in np.where(explore_flags)[0]:
+                if action_masks is not None:
+                    # Pick from valid actions only
+                    valid_actions = np.where(action_masks[i])[0]
+                    if len(valid_actions) > 0:
+                        actions[i] = np.random.choice(valid_actions)
+                    else:
+                        actions[i] = np.random.randint(0, self.action_space_n)
+                else:
+                    actions[i] = np.random.randint(0, self.action_space_n)
+        
+        # --- COMBINE ---
+        # Copy greedy actions to the result array
+        # Then (implicitly) the loop above already overwrote the random ones
+        # Actually, simpler logic:
+        # 1. Fill 'actions' with greedy results
+        actions = greedy_actions.copy()
+        
+        # 2. Overwrite the 'explore' indices with random choices
+        if np.any(explore_flags):
+             for i in np.where(explore_flags)[0]:
+                if action_masks is not None:
+                    valid_choices = np.where(action_masks[i])[0]
+                    if len(valid_choices) > 0:
+                        actions[i] = np.random.choice(valid_choices)
+                    else:
+                        actions[i] = np.random.randint(0, self.action_space_n)
+                else:
+                    actions[i] = np.random.randint(0, self.action_space_n)
+
+        return actions
 
     def update(self):
         if len(self.memory) < self.batch_size:
@@ -120,8 +220,16 @@ class DQNAgent(BaseAgent):
         
         # Convert to tensors
         # states is list of numpy arrays, need to preprocess each
-        states_tensor = torch.cat([self.preprocess(s) for s in states])
-        next_states_tensor = torch.cat([self.preprocess(s) for s in next_states])
+        state_batch = np.array(states)
+        state_batch = np.log2(np.maximum(state_batch, 1))
+        state_batch = np.expand_dims(state_batch, axis=1)
+
+        next_state_batch = np.array(next_states)
+        next_state_batch = np.log2(np.maximum(next_state_batch, 1))
+        next_state_batch = np.expand_dims(next_state_batch, axis=1)
+
+        states_tensor = torch.FloatTensor(state_batch).to(self.device)
+        next_states_tensor = torch.FloatTensor(next_state_batch).to(self.device)
         
         actions_tensor = torch.LongTensor(actions).to(self.device)
         rewards_tensor = torch.FloatTensor(rewards).to(self.device)
@@ -144,7 +252,7 @@ class DQNAgent(BaseAgent):
             
             expected_q_value = rewards_tensor + self.gamma * next_q_value * (1 - dones_tensor)
             
-        loss = nn.MSELoss()(q_value, expected_q_value)
+        loss = nn.SmoothL1Loss()(q_value, expected_q_value)
         
         self.optimizer.zero_grad()
         loss.backward()
