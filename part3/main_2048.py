@@ -1,43 +1,29 @@
 import gymnasium as gym
-import env_2048
 import agent_2048
 import numpy as np
 import time
 import argparse
 from tqdm import tqdm
-import torch
+import env_2048 # type: ignore
 
-# --- 1. THE NEW VECTORIZED TRAINING LOOP (FAST) ---
-def train_vectorized(envs, agent, total_steps=1000000000000):
+def train(envs, agent, total_steps):
     print(f"Starting Vectorized Training for {total_steps} steps...")
-    
-    # Reset returns a BATCH of 32 states: (32, 4, 4)
+
     obs, infos = envs.reset()
-    
-    # We track total steps, not episodes
     pbar = tqdm(range(0, total_steps, envs.num_envs), desc="Training", unit="step")
-    
     for step in pbar:
         # A. Handle Action Masks for Batch
         action_masks = None
-        if isinstance(infos, dict) and "action_mask" in infos:
+        if "action_mask" in infos:
              action_masks = np.array(infos["action_mask"])
-        elif isinstance(infos, tuple): 
-             # Handle tuple info format if gym version differs
-             pass
 
-        # B. Act on Batch (Calls the new act_batch method)
-        actions = agent.act_batch(obs, action_masks)
-        
-        # C. Step all 32 games at once
+        actions = agent.act(obs, action_masks)
         next_obs, rewards, terminated, truncated, infos = envs.step(actions)
         
-        # D. Store 32 transitions in memory
         for i in range(envs.num_envs):
             done = terminated[i] or truncated[i]
             agent.remember(obs[i], actions[i], rewards[i], next_obs[i], done)
-            
-        # E. Train ONCE per batch step (Every 32 game moves)
+
         if len(agent.memory) > agent.batch_size:
             agent.update()
 
@@ -45,7 +31,7 @@ def train_vectorized(envs, agent, total_steps=1000000000000):
 
         # Logging
         if step % 1000 == 0:
-            avg_max_tile = np.mean(np.max(obs, axis=(1,2)))
+            avg_max_tile = 2**(np.mean(np.log2(np.max(obs, axis=(1,2)))))
             pbar.set_postfix({
                 "Epsilon": f"{agent.epsilon:.2f}", 
                 "Avg Max": f"{avg_max_tile:.1f}"
@@ -53,7 +39,6 @@ def train_vectorized(envs, agent, total_steps=1000000000000):
 
     print("Training finished.")
 
-# --- 2. THE STANDARD TESTING LOOP (Single Env) ---
 def test(env, agent, episodes=5):
     print(f"Starting testing for {episodes} episodes...")
     agent.epsilon = 0 # Turn off randomness
@@ -78,15 +63,14 @@ def test(env, agent, episodes=5):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', type=str, default='mix', choices=['train', 'test', 'mix', 'random'])
-    parser.add_argument('--total_steps', type=int, default=12000000, help='Total training steps')
+    parser.add_argument('--total_steps', type=int, default=32000000, help='Total training steps')
     parser.add_argument('--test_episodes', type=int, default=5)
     parser.add_argument('--render', type=bool, default=False)
     args = parser.parse_args()
 
-    # --- 3. TRAIN BLOCK (VECTORIZED) ---
     if args.action in ['train', 'mix']:
         # Create 64 parallel games
-        num_envs = 64
+        num_envs = 32
         envs = gym.vector.SyncVectorEnv([
             lambda: gym.make('2048-v0', render_mode=None) for _ in range(num_envs)
         ])
@@ -97,9 +81,7 @@ if __name__ == "__main__":
             action_space_n=envs.single_action_space.n, 
             epsilon_decay=0.9999
         )
-        
-        # Run the FAST loop
-        train_vectorized(envs, agent, total_steps=args.total_steps)
+        train(envs, agent, total_steps=args.total_steps)
         
         agent.save("dqn_2048.pth")
         envs.close()

@@ -47,7 +47,6 @@ class TwentyFortyEightEnv(gym.Env):
         return self.board, {"action_mask": self._get_action_mask()}
 
     def step(self, action):
-        # 1. Fast Numpy Logic
         rotated_board = np.rot90(self.board, k=action)
         new_board, reward = self._merge_left(rotated_board)
         self.board = np.rot90(new_board, k=-action)

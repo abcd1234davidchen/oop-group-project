@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import collections
 
 class BaseAgent(abc.ABC):
     @abc.abstractmethod
@@ -65,12 +64,10 @@ class ReplayBuffer:
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
         
-        # Overwrite memory at the current pointer (Circular Buffer)
         self.buffer[self.position] = (state, action, reward, next_state, done)
         self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size):
-        # Random access in a list is INSTANT (O(1))
         batch = random.sample(self.buffer, batch_size)
         state, action, reward, next_state, done = zip(*batch)
         return state, action, reward, next_state, done
@@ -98,119 +95,52 @@ class DQNAgent(BaseAgent):
         
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
         self.memory = ReplayBuffer(50000)
-        self.batch_size = 1024
+        self.batch_size = 512
         self.target_update_freq = 100
         self.steps_done = 0
 
     def preprocess(self, observation):
-        # Flatten and log2 transform
-        # Add a small epsilon to avoid log2(0)
-        # obs is numpy array
-        # Use log2 to scale values: log2(0+1)=0, log2(2)=1, log2(4)=2...
-        obs_log = np.log2(np.maximum(observation, 1))
-        tensor = torch.FloatTensor(obs_log).unsqueeze(0).unsqueeze(0)
+        tensor = np.log2(np.maximum(observation, 1))
+        tensor = torch.from_numpy(tensor).float()
+        if tensor.ndim == 2:
+            tensor = tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+        elif tensor.ndim == 3:
+            tensor = tensor.unsqueeze(1)  # Add channel dimension
+        # Now tensor shape is (batch_size, 1, grid_size, grid_size)
         return tensor.to(self.device)
 
     def act(self, observation, action_mask=None):
-        if random.random() < self.epsilon:
+        if observation.ndim == 2:
+            observation = np.expand_dims(observation, axis=0)
             if action_mask is not None:
-                # Sample from valid actions
-                valid_actions = np.where(action_mask)[0]
-                if len(valid_actions) > 0:
-                    return int(random.choice(valid_actions))
-            return random.randint(0, self.action_space_n - 1)
-        else:
-            with torch.no_grad():
-                state_tensor = self.preprocess(observation)
-                q_values = self.q_net(state_tensor)
-                
-                if action_mask is not None:
-                    # Mask invalid actions with -inf
-                    # Convert mask to boolean tensor
-                    mask_tensor = torch.BoolTensor(action_mask).to(self.device)
-                    # Use a very large negative number instead of -inf to avoid NaN if all are invalid (though unlikely)
-                    q_values[0, ~mask_tensor] = -1e9
-                
-                return q_values.argmax().item()
-        
-    def act_batch(self, observations, action_masks=None):
-        """
-        Selects actions for a batch of environments (Vectorized).
-        
-        Args:
-            observations: Numpy array of shape (Batch_Size, 4, 4)
-            action_masks: Optional Numpy array of shape (Batch_Size, 4)
-            
-        Returns:
-            Numpy array of shape (Batch_Size,) containing actions (int)
-        """
-        batch_size = len(observations)
-        actions = np.zeros(batch_size, dtype=int)
-        
-        # 1. Determine which agents will explore (Random) vs exploit (Greedy)
-        # We generate a list of random numbers, one for each game
-        explore_flags = np.random.random(batch_size) < self.epsilon
-        
-        # --- PATH A: GREEDY ACTIONS (The Neural Network) ---
-        # We run the network for EVERYONE first (it's faster to batch 32 than split them)
+                action_mask = np.expand_dims(action_mask, axis=0)
+        batch_size = len(observation)
+        explores = np.random.random(batch_size) < self.epsilon
+
         with torch.no_grad():
             self.q_net.eval()
-            
-            # Preprocess the whole batch at once: (32, 4, 4) -> (32, 1, 4, 4)
-            obs_log = np.log2(np.maximum(observations, 1))
-            obs_log = np.expand_dims(obs_log, axis=1)
-            state_tensor = torch.FloatTensor(obs_log).to(self.device)
-            
-            # Forward Pass
-            q_values = self.q_net(state_tensor) # Shape: (32, 4)
-            
-            # Apply Masks (if provided)
-            if action_masks is not None:
-                # Convert mask to Tensor (True = Valid, False = Invalid)
-                mask_tensor = torch.BoolTensor(action_masks).to(self.device)
-                # Set invalid actions to -infinity so argmax never picks them
-                # Note: We use ~mask_tensor because typically mask=1 means valid
-                # If your mask logic is 0=valid, remove the ~
+            state_tensor = self.preprocess(observation)
+            q_values = self.q_net(state_tensor)
+
+            if action_mask is not None:
+                mask_tensor = torch.BoolTensor(action_mask).to(self.device)
                 q_values[~mask_tensor] = -1e9
-                
-            # Select best actions
+
             greedy_actions = q_values.argmax(dim=1).cpu().numpy()
             self.q_net.train()
 
-        # --- PATH B: RANDOM ACTIONS ---
-        # For the games that decided to explore, overwrite the greedy action with a random one
-        if np.any(explore_flags):
-            for i in np.where(explore_flags)[0]:
-                if action_masks is not None:
-                    # Pick from valid actions only
-                    valid_actions = np.where(action_masks[i])[0]
-                    if len(valid_actions) > 0:
-                        actions[i] = np.random.choice(valid_actions)
-                    else:
-                        actions[i] = np.random.randint(0, self.action_space_n)
-                else:
-                    actions[i] = np.random.randint(0, self.action_space_n)
-        
-        # --- COMBINE ---
-        # Copy greedy actions to the result array
-        # Then (implicitly) the loop above already overwrote the random ones
-        # Actually, simpler logic:
-        # 1. Fill 'actions' with greedy results
         actions = greedy_actions.copy()
-        
-        # 2. Overwrite the 'explore' indices with random choices
-        if np.any(explore_flags):
-             for i in np.where(explore_flags)[0]:
-                if action_masks is not None:
-                    valid_choices = np.where(action_masks[i])[0]
+        if np.any(explores):
+            for i in np.where(explores)[0]:
+                if action_mask is not None:
+                    valid_choices = np.where(action_mask[i])[0]
                     if len(valid_choices) > 0:
                         actions[i] = np.random.choice(valid_choices)
                     else:
                         actions[i] = np.random.randint(0, self.action_space_n)
                 else:
                     actions[i] = np.random.randint(0, self.action_space_n)
-
-        return actions
+        return actions if len(actions) > 1 else int(actions[0])
 
     def update(self):
         if len(self.memory) < self.batch_size:
@@ -218,33 +148,19 @@ class DQNAgent(BaseAgent):
         
         states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
         
-        # Convert to tensors
-        # states is list of numpy arrays, need to preprocess each
-        state_batch = np.array(states)
-        state_batch = np.log2(np.maximum(state_batch, 1))
-        state_batch = np.expand_dims(state_batch, axis=1)
-
-        next_state_batch = np.array(next_states)
-        next_state_batch = np.log2(np.maximum(next_state_batch, 1))
-        next_state_batch = np.expand_dims(next_state_batch, axis=1)
-
-        states_tensor = torch.FloatTensor(state_batch).to(self.device)
-        next_states_tensor = torch.FloatTensor(next_state_batch).to(self.device)
+        states_tensor = self.preprocess(np.array(states))
+        next_states_tensor = self.preprocess(np.array(next_states))
         
-        actions_tensor = torch.LongTensor(actions).to(self.device)
-        rewards_tensor = torch.FloatTensor(rewards).to(self.device)
-        dones_tensor = torch.FloatTensor(dones).to(self.device)
-        
+        actions_tensor = torch.tensor(actions, dtype=torch.long, device=self.device)
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float, device=self.device)
+        dones_tensor = torch.tensor(dones, dtype=torch.float, device=self.device)
+
         # Q(s, a)
         q_values = self.q_net(states_tensor)
         q_value = q_values.gather(1, actions_tensor.unsqueeze(1)).squeeze(1)
         
-        # Double DQN:
-        # Action selection: argmax_a Q(s', a; theta)  (using online network)
-        # Evaluation: Q(s', a_max; theta_target)      (using target network)
-        
         with torch.no_grad():
-            # Get best action for next state from online network
+            # Get best action for next state from training network
             next_state_actions = self.q_net(next_states_tensor).argmax(1).unsqueeze(1)
             # Evaluate that action using target network
             next_q_values = self.target_net(next_states_tensor)
