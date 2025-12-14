@@ -55,25 +55,55 @@ class QNetwork(nn.Module):
         return self.fc(x)
 
 class ReplayBuffer:
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.buffer = []
+    def __init__(self, capacity, state_shape=None, state_dtype=np.int32):
+        self.capacity = int(capacity)
+        self.state_shape = tuple(state_shape) if state_shape is not None else None
+        self.state_dtype = state_dtype
         self.position = 0
+        self.size = 0
+        self._initialized = False
+
+        if self.state_shape is not None:
+            self._init_arrays(self.state_shape, self.state_dtype)
+
+    def _init_arrays(self, state_shape, state_dtype):
+        self.states = np.zeros((self.capacity,) + tuple(state_shape), dtype=state_dtype)
+        self.next_states = np.zeros((self.capacity,) + tuple(state_shape), dtype=state_dtype)
+        self.actions = np.zeros((self.capacity,), dtype=np.int32)
+        self.rewards = np.zeros((self.capacity,), dtype=np.float32)
+        self.dones = np.zeros((self.capacity,), dtype=np.uint8)
+        self._initialized = True
 
     def push(self, state, action, reward, next_state, done):
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(None)
-        
-        self.buffer[self.position] = (state, action, reward, next_state, done)
+        s = np.asarray(state)
+        ns = np.asarray(next_state)
+
+        if not self._initialized:
+            self._init_arrays(s.shape, s.dtype)
+
+        self.states[self.position] = s
+        self.next_states[self.position] = ns
+        self.actions[self.position] = int(action)
+        self.rewards[self.position] = float(reward)
+        self.dones[self.position] = 1 if done else 0
+
         self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size):
-        batch = random.sample(self.buffer, batch_size)
-        state, action, reward, next_state, done = zip(*batch)
-        return state, action, reward, next_state, done
+        if self.size == 0:
+            raise ValueError("Cannot sample from an empty buffer")
+        idx = np.random.choice(self.size, int(batch_size), replace=False)
+        return (
+            self.states[idx].copy(),
+            self.actions[idx].copy(),
+            self.rewards[idx].copy(),
+            self.next_states[idx].copy(),
+            self.dones[idx].copy(),
+        )
 
     def __len__(self):
-        return len(self.buffer)
+        return int(self.size)
 
 class DQNAgent(BaseAgent):
     def __init__(self, grid_size, action_space_n, lr=1e-3, gamma=0.99, epsilon_start=1.0, epsilon_end=0.01, epsilon_decay=0.995):
@@ -94,7 +124,7 @@ class DQNAgent(BaseAgent):
         self.target_net.eval()
         
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
-        self.memory = ReplayBuffer(50000)
+        self.memory = ReplayBuffer(50000, state_shape=(grid_size, grid_size), state_dtype=np.int32)
         self.batch_size = 512
         self.target_update_freq = 100
         self.steps_done = 0

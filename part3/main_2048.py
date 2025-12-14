@@ -61,9 +61,11 @@ def train(envs, agent, total_steps, plot=False):
             plt.grid(True)
             # Calculate moving average
             window_size = 100
-            if len(completed_episode_scores) >= window_size:
-                moving_avg = np.convolve(completed_episode_scores, np.ones(window_size)/window_size, mode='valid')
-                plt.plot(range(window_size-1, len(completed_episode_scores)), moving_avg, color='red', label=f'{window_size}-Episode Moving Avg')
+            scores = np.array(completed_episode_scores)
+            plt.plot(scores, alpha=0.3, color='blue', label='Episode Score')
+            if len(scores) >= window_size:
+                moving_avg = np.convolve(scores, np.ones(window_size)/window_size, mode='valid')
+                plt.plot(range(window_size-1, len(scores)), moving_avg, color='red', label=f'{window_size}-Episode Moving Avg')
             
             plt.legend()
             plt.savefig(f'training_scores_{total_steps}_steps.png')
