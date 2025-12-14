@@ -5,12 +5,18 @@ import time
 import argparse
 from tqdm import tqdm
 import env_2048 # type: ignore
+import matplotlib.pyplot as plt
 
-def train(envs, agent, total_steps):
+def train(envs, agent, total_steps, plot=False):
     print(f"Starting Vectorized Training for {total_steps} steps...")
 
     obs, infos = envs.reset()
     pbar = tqdm(range(0, total_steps, envs.num_envs), desc="Training", unit="step")
+    
+    # Track scores
+    episode_rewards = np.zeros(envs.num_envs)
+    completed_episode_scores = []
+
     for step in pbar:
         # A. Handle Action Masks for Batch
         action_masks = None
@@ -20,8 +26,14 @@ def train(envs, agent, total_steps):
         actions = agent.act(obs, action_masks)
         next_obs, rewards, terminated, truncated, infos = envs.step(actions)
         
+        episode_rewards += rewards
+        
         for i in range(envs.num_envs):
             done = terminated[i] or truncated[i]
+            if done:
+                completed_episode_scores.append(episode_rewards[i])
+                episode_rewards[i] = 0
+                
             agent.remember(obs[i], actions[i], rewards[i], next_obs[i], done)
 
         if len(agent.memory) > agent.batch_size:
@@ -38,6 +50,27 @@ def train(envs, agent, total_steps):
             })
 
     print("Training finished.")
+    
+    if plot and completed_episode_scores:
+        try:
+            plt.figure(figsize=(10, 5))
+            plt.plot(completed_episode_scores, alpha=0.3, color='blue', label='Episode Score')
+            plt.title('Training Score per Episode')
+            plt.xlabel('Episode')
+            plt.ylabel('Score')
+            plt.grid(True)
+            # Calculate moving average
+            window_size = 100
+            if len(completed_episode_scores) >= window_size:
+                moving_avg = np.convolve(completed_episode_scores, np.ones(window_size)/window_size, mode='valid')
+                plt.plot(range(window_size-1, len(completed_episode_scores)), moving_avg, color='red', label=f'{window_size}-Episode Moving Avg')
+            
+            plt.legend()
+            plt.savefig(f'training_scores_{total_steps}_steps.png')
+            print(f"Plot saved to training_scores_{total_steps}_steps.png")
+            plt.close()
+        except Exception as e:
+            print(f"Error creating plot: {e}")
 
 def test(env, agent, episodes=5):
     print(f"Starting testing for {episodes} episodes...")
@@ -63,9 +96,10 @@ def test(env, agent, episodes=5):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--action', type=str, default='mix', choices=['train', 'test', 'mix', 'random'])
-    parser.add_argument('--total_steps', type=int, default=32000000, help='Total training steps')
+    parser.add_argument('--total_steps', type=int, default=32_000_000, help='Total training steps')
     parser.add_argument('--test_episodes', type=int, default=5)
     parser.add_argument('--render', type=bool, default=False)
+    parser.add_argument('--plot', action='store_true', help='Plot training scores')
     args = parser.parse_args()
 
     if args.action in ['train', 'mix']:
@@ -81,7 +115,7 @@ if __name__ == "__main__":
             action_space_n=envs.single_action_space.n, 
             epsilon_decay=0.9999
         )
-        train(envs, agent, total_steps=args.total_steps)
+        train(envs, agent, total_steps=args.total_steps, plot=args.plot)
         
         agent.save("dqn_2048.pth")
         envs.close()
