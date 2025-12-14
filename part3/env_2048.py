@@ -2,7 +2,7 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.registration import register
 import numpy as np
-import game_2048 as g2048
+import pygame # Re-added for graphics
 
 register(
     id='2048-v0',
@@ -15,80 +15,151 @@ class TwentyFortyEightEnv(gym.Env):
     def __init__(self, render_mode=None, size=4):
         self.size = size
         self.render_mode = render_mode
-        self.game = g2048.Game2048(size=size, render_mode=render_mode)
+        self.action_space = spaces.Discrete(4)
+        self.observation_space = spaces.Box(0, 65536, (size, size), dtype=np.int32)
+        self.board = np.zeros((self.size, self.size), dtype=np.int32)
         
-        # Action space: 0: Left, 1: Up, 2: Right, 3: Down
-        self.action_space = spaces.Discrete(len(g2048.Action))
-        
-        # Observation space: 4x4 grid. Values are powers of 2.
-        # Max tile is theoretically large, but we can set a reasonable upper bound or use high=inf
-        # Using 65536 as a safe upper bound for 4x4
-        self.observation_space = spaces.Box(
-            low=0, 
-            high=65536, 
-            shape=(size, size), 
-            dtype=np.int32
-        )
-
-    def _get_action_mask(self):
-        valid_actions = self.game.get_valid_actions()
-        mask = np.zeros(self.action_space.n, dtype=bool)
-        for action in valid_actions:
-            mask[action.value] = True
-        return mask
+        # --- Rendering Setup (From your original code) ---
+        self.window_surface = None
+        self.clock = None
+        self.cell_size = 100
+        self.padding = 10
+        self.bg_color = (187, 173, 160)
+        self.empty_cell_color = (205, 193, 180)
+        self.colors = {
+            2: (238, 228, 218), 4: (237, 224, 200), 8: (242, 177, 121),
+            16: (245, 149, 99), 32: (246, 124, 95), 64: (246, 94, 59),
+            128: (237, 207, 114), 256: (237, 204, 97), 512: (237, 200, 80),
+            1024: (237, 197, 63), 2048: (237, 194, 46),
+        }
+        self.text_color_dark = (119, 110, 101)
+        self.text_color_light = (249, 246, 242)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        if seed is not None:
-             # If game supported seeding, we would pass it. 
-             # Currently Game2048 uses random module. 
-             # We can seed python's random or numpy if we want to support it deeply.
-             # For now, just call reset.
-             pass
+        self.board.fill(0)
+        self._add_tile()
+        self._add_tile()
         
-        grid = self.game.reset()
-        info = {"action_mask": self._get_action_mask()}
-        return grid, info
+        if self.render_mode == "human":
+            self._init_render()
+            
+        return self.board, {"action_mask": self._get_action_mask()}
 
     def step(self, action):
-        # Map integer action to Action enum
-        try:
-            game_action = g2048.Action(action)
-        except ValueError:
-             # Handle invalid actions if necessary, though gym samples should be valid
-             game_action = g2048.Action.LEFT 
+        rotated_board = np.rot90(self.board, k=action)
+        new_board, reward = self._merge_left(rotated_board)
+        self.board = np.rot90(new_board, k=-action)
+        
+        if not np.array_equal(rotated_board, new_board):
+            self._add_tile()
 
-        grid, reward, terminated = self.game.step(game_action)
-        
-        # Add penalty for having too many non-empty blocks (or few empty blocks)
-        # Strategy: Penalize based on the number of occupied cells
-        # Or: Penalize if number of empty cells is low
-        
-        num_empty = self.game.get_num_empty_cells()
-        # Example penalty: -10 if empty cells < 4
-        if num_empty < 4:
-            reward -= 10
-            
-        # Reward for keeping max tile in corner (strategy)
-        if self.game.is_max_tile_in_corner():
-            reward += 10 # Encourage keeping max tile in corner
-        
-        # Truncated is used for time limits, which we don't strictly enforce here but could
+        # 2. Rewards
+        total_reward = float(reward)
+        num_empty = len(self.board[self.board == 0])
+        if num_empty < 4: total_reward -= 10.0
+        if self._is_max_in_corner(): total_reward += 10.0
+
+        terminated = self._is_game_over()
         truncated = False
         
-        info = {
-            "score": self.game.get_score(),
-            "max_tile": np.max(grid),
-            "action_mask": self._get_action_mask()
-        }
-        
+        info = {"max_tile": np.max(self.board), "action_mask": self._get_action_mask()}
+
         if self.render_mode == "human":
             self.render()
 
-        return grid, float(reward), terminated, truncated, info
+        return self.board, total_reward, terminated, truncated, info
+
+    def _merge_left(self, board):
+        new_board = np.zeros_like(board)
+        total_score = 0
+        for r in range(self.size):
+            row = board[r]
+            non_zeros = row[row != 0]
+            merged = []
+            skip = False
+            for i in range(len(non_zeros)):
+                if skip:
+                    skip = False
+                    continue
+                if i + 1 < len(non_zeros) and non_zeros[i] == non_zeros[i+1]:
+                    value = non_zeros[i] * 2
+                    merged.append(value)
+                    total_score += value
+                    skip = True
+                else:
+                    merged.append(non_zeros[i])
+            new_board[r, :len(merged)] = merged
+        return new_board, total_score
+
+    def _add_tile(self):
+        empty_cells = np.argwhere(self.board == 0)
+        if len(empty_cells) > 0:
+            idx = np.random.choice(len(empty_cells))
+            r, c = empty_cells[idx]
+            self.board[r, c] = 2 if np.random.random() < 0.9 else 4
+
+    def _is_max_in_corner(self):
+        max_val = np.max(self.board)
+        corners = [self.board[0,0], self.board[0,3], self.board[3,0], self.board[3,3]]
+        return max_val in corners
+
+    def _get_action_mask(self):
+        mask = np.zeros(4, dtype=bool)
+        for a in range(4):
+            rot = np.rot90(self.board, k=a)
+            sim, _ = self._merge_left(rot)
+            if not np.array_equal(rot, sim):
+                mask[a] = True
+        return mask
+
+    def _is_game_over(self):
+        if np.any(self.board == 0): return False
+        for r in range(4):
+            for c in range(3):
+                if self.board[r, c] == self.board[r, c+1]: return False
+        for c in range(4):
+            for r in range(3):
+                if self.board[r, c] == self.board[r+1, c]: return False
+        return True
+
+    # --- GRAPHICS LOGIC RESTORED ---
+    def _init_render(self):
+        if self.window_surface is None:
+            pygame.init()
+            pygame.display.init()
+            self.clock = pygame.time.Clock()
+            width = self.size * self.cell_size + (self.size + 1) * self.padding
+            self.window_surface = pygame.display.set_mode((width, width))
+            pygame.display.set_caption("2048 RL")
+            self.font = pygame.font.SysFont("Arial", 40, bold=True)
 
     def render(self):
-        self.game.render()
+        if self.render_mode != 'human': return
+        if self.window_surface is None: self._init_render()
+
+        self.window_surface.fill(self.bg_color)
+        for r in range(self.size):
+            for c in range(self.size):
+                val = self.board[r, c]
+                x = self.padding + c * (self.cell_size + self.padding)
+                y = self.padding + r * (self.cell_size + self.padding)
+                color = self.colors.get(val, (60, 58, 50))
+                if val == 0: color = self.empty_cell_color
+                
+                pygame.draw.rect(self.window_surface, color, (x, y, self.cell_size, self.cell_size), border_radius=5)
+                if val != 0:
+                    txt_col = self.text_color_light if val > 4 else self.text_color_dark
+                    surf = self.font.render(str(val), True, txt_col)
+                    rect = surf.get_rect(center=(x + 50, y + 50))
+                    self.window_surface.blit(surf, rect)
+        
+        pygame.display.update()
+        self.clock.tick(30)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: self.close()
 
     def close(self):
-        self.game.close()
+        if self.window_surface is not None:
+            pygame.quit()
+            self.window_surface = None

@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import collections
 
 class BaseAgent(abc.ABC):
     @abc.abstractmethod
@@ -31,24 +30,42 @@ class RandomAgent(BaseAgent):
                  return int(random.choice(valid_actions))
         return self.action_space.sample()
 
+# I need further examination on conv portion
 class QNetwork(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, output_dim)
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=2, stride=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=2, stride=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, output_dim)
+        )
         
     def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        return self.fc3(x)
+        x = self.conv(x)
+        x = x.view(x.size(0), -1)
+        return self.fc(x)
 
 class ReplayBuffer:
     def __init__(self, capacity):
-        self.buffer = collections.deque(maxlen=capacity)
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
 
     def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        
+        self.buffer[self.position] = (state, action, reward, next_state, done)
+        self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
@@ -68,7 +85,8 @@ class DQNAgent(BaseAgent):
         self.epsilon_min = epsilon_end
         self.epsilon_decay = epsilon_decay
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {self.device}")
         
         self.q_net = QNetwork(self.input_dim, action_space_n).to(self.device)
         self.target_net = QNetwork(self.input_dim, action_space_n).to(self.device)
@@ -76,41 +94,53 @@ class DQNAgent(BaseAgent):
         self.target_net.eval()
         
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
-        self.memory = ReplayBuffer(10000)
-        self.batch_size = 64
+        self.memory = ReplayBuffer(50000)
+        self.batch_size = 512
         self.target_update_freq = 100
         self.steps_done = 0
 
     def preprocess(self, observation):
-        # Flatten and log2 transform
-        # Add a small epsilon to avoid log2(0)
-        # obs is numpy array
-        obs_flat = observation.flatten()
-        # Use log2 to scale values: log2(0+1)=0, log2(2)=1, log2(4)=2...
-        obs_log = np.log2(np.maximum(obs_flat, 1))
-        return torch.FloatTensor(obs_log).unsqueeze(0).to(self.device)
+        tensor = np.log2(np.maximum(observation, 1))
+        tensor = torch.from_numpy(tensor).float()
+        if tensor.ndim == 2:
+            tensor = tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+        elif tensor.ndim == 3:
+            tensor = tensor.unsqueeze(1)  # Add channel dimension
+        # Now tensor shape is (batch_size, 1, grid_size, grid_size)
+        return tensor.to(self.device)
 
     def act(self, observation, action_mask=None):
-        if random.random() < self.epsilon:
+        if observation.ndim == 2:
+            observation = np.expand_dims(observation, axis=0)
             if action_mask is not None:
-                # Sample from valid actions
-                valid_actions = np.where(action_mask)[0]
-                if len(valid_actions) > 0:
-                    return int(random.choice(valid_actions))
-            return random.randint(0, self.action_space_n - 1)
-        else:
-            with torch.no_grad():
-                state_tensor = self.preprocess(observation)
-                q_values = self.q_net(state_tensor)
-                
+                action_mask = np.expand_dims(action_mask, axis=0)
+        batch_size = len(observation)
+        explores = np.random.random(batch_size) < self.epsilon
+
+        with torch.no_grad():
+            self.q_net.eval()
+            state_tensor = self.preprocess(observation)
+            q_values = self.q_net(state_tensor)
+
+            if action_mask is not None:
+                mask_tensor = torch.BoolTensor(action_mask).to(self.device)
+                q_values[~mask_tensor] = -1e9
+
+            greedy_actions = q_values.argmax(dim=1).cpu().numpy()
+            self.q_net.train()
+
+        actions = greedy_actions.copy()
+        if np.any(explores):
+            for i in np.where(explores)[0]:
                 if action_mask is not None:
-                    # Mask invalid actions with -inf
-                    # Convert mask to boolean tensor
-                    mask_tensor = torch.BoolTensor(action_mask).to(self.device)
-                    # Use a very large negative number instead of -inf to avoid NaN if all are invalid (though unlikely)
-                    q_values[0, ~mask_tensor] = -1e9
-                
-                return q_values.argmax().item()
+                    valid_choices = np.where(action_mask[i])[0]
+                    if len(valid_choices) > 0:
+                        actions[i] = np.random.choice(valid_choices)
+                    else:
+                        actions[i] = np.random.randint(0, self.action_space_n)
+                else:
+                    actions[i] = np.random.randint(0, self.action_space_n)
+        return actions if len(actions) > 1 else int(actions[0])
 
     def update(self):
         if len(self.memory) < self.batch_size:
@@ -118,25 +148,19 @@ class DQNAgent(BaseAgent):
         
         states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
         
-        # Convert to tensors
-        # states is list of numpy arrays, need to preprocess each
-        states_tensor = torch.cat([self.preprocess(s) for s in states])
-        next_states_tensor = torch.cat([self.preprocess(s) for s in next_states])
+        states_tensor = self.preprocess(np.array(states))
+        next_states_tensor = self.preprocess(np.array(next_states))
         
-        actions_tensor = torch.LongTensor(actions).to(self.device)
-        rewards_tensor = torch.FloatTensor(rewards).to(self.device)
-        dones_tensor = torch.FloatTensor(dones).to(self.device)
-        
+        actions_tensor = torch.tensor(actions, dtype=torch.long, device=self.device)
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float, device=self.device)
+        dones_tensor = torch.tensor(dones, dtype=torch.float, device=self.device)
+
         # Q(s, a)
         q_values = self.q_net(states_tensor)
         q_value = q_values.gather(1, actions_tensor.unsqueeze(1)).squeeze(1)
         
-        # Double DQN:
-        # Action selection: argmax_a Q(s', a; theta)  (using online network)
-        # Evaluation: Q(s', a_max; theta_target)      (using target network)
-        
         with torch.no_grad():
-            # Get best action for next state from online network
+            # Get best action for next state from training network
             next_state_actions = self.q_net(next_states_tensor).argmax(1).unsqueeze(1)
             # Evaluate that action using target network
             next_q_values = self.target_net(next_states_tensor)
@@ -144,7 +168,7 @@ class DQNAgent(BaseAgent):
             
             expected_q_value = rewards_tensor + self.gamma * next_q_value * (1 - dones_tensor)
             
-        loss = nn.MSELoss()(q_value, expected_q_value)
+        loss = nn.SmoothL1Loss()(q_value, expected_q_value)
         
         self.optimizer.zero_grad()
         loss.backward()
