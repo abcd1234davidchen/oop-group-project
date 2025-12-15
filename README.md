@@ -52,3 +52,10 @@ if no arguments are provided, both training and testing will be executed.
 - --random: Run a random agent for a specified number of episodes (default: 5). Training and testing will be skipped if this is specified.
 - --render: Render the environment during testing (default: True).
 - --plot: Plot the training scores after training (default: False).
+
+## Contribution Table
+| Team Member | Contribution |
+|-------------|--------------|
+|B123245006 | Part 2, Part 3 Main, Part 3 Agent|
+|B123245001 | README, UML, reflection report, bug fix|
+|B123245003 | Part 3 Environment, Part 3 Training, Slides|
