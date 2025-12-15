@@ -1,91 +1,54 @@
-# Group Project Setup Guide
+# OOP Group Project
+This repository contains three implementations of reinforcement learning agents using Object-Oriented Programming (OOP) principles. The project is divided into three parts:
 
-## Project Content
-- Gymnasium v1.2.2
-- Part1 Sample Code
-- Part2 Sample Code
-- Part3 Sample Code
-  
-## Installation
+- Part 1: mountain car
+- Part 2: frozen lake
+- Part 3: custom 2048 game environment with Deep Q-Network (DQN) agent
 
+For the first part, the run is a success. The second part gets 63% score. The third part gets high scores consistently.
+
+## Project Overview
+This project all uses OpenAI Gymnasium environments to demonstrate different reinforcement learning techniques.
+
+### Part 1: Mountain Car
+This is one of the example scene in OpenAI Gymnasium. The objective is to drive a car up a steep hill using momentum. The agent uses Q-learning with a discretized state space to learn the optimal policy.
+
+### Part 2: Frozen Lake
+This part implements a Q-learning agent to navigate a frozen lake environment. The agent learns to avoid holes and reach the goal by updating its Q-values based on the rewards received. We modified the three parameters to improve the performance of the agent, achieving a success rate of 63%.
+
+### Part 3: Custom 2048 Game Environment with DQN Agent
+We implemented our own 2048 in a custom OpenAI Gymnasium environment. A DQN agent is designed and trained to play the game using experience replay and a target network. The agent can achieve high scores consistently after training.
+
+## Requirements and Setup
+This project is managed using UV, use `uv sync` to install dependencies and set up the environment if UV is installed.
+
+Alternatively, you can manually install the required packages using pip:
 ```bash
-# 1. Create a virtual environment
-python -m venv .venv
-
-# 2. Activate the virtual environment
-source .venv/bin/activate
-
-# 3. Navigate to the Gymnasium directory
-cd group_project/Gymnasium
-
-# 4. Install Gymnasium in editable mode
-pip install -e .
-
-# 5. Install additional dependencies
-pip install "gymnasium[classic_control]"
-pip install matplotlib
+pip install "gymnasium[classic-control]" numpy pygame torch matplotlib tqdm
 ```
 
----
+## Running the Code
+To run each part of the project, navigate to the respective directory and execute the main script with the desired options.
 
-## ✅ Verification
-
-Run the following command to verify that the installation is successful:
-
+### Part 1: mountain car
 ```bash
-% pip list
+uv run main_mountain_car.py [--train] [--render] [--episodes [EPISODES]]
 ```
-
-Sample Output from MacOS:
-
-```
-Package              Version Editable project location
--------------------- ------- --------------------------------------------
-cloudpickle          3.1.2
-Farama-Notifications 0.0.4
-gymnasium            1.2.2   ./group_project/Gymnasium
-numpy                2.3.5
-pip                  24.3.1
-typing_extensions    4.15.0
-```
-
-If your output matches the above (or is similar), your environment is correctly configured.
-
----
-
-## 🚀 Running the Project
-
-### **Part 1: Mountain Car**
-Train and test the reinforcement learning agent:
-
+- --train: Default to test, if specified, will train the agent.  
+- --render: Render the environment during training/testing.  
+- --episodes: Number of episodes to train/test the agent (default: 10).
+### Part 2: frozen lake
 ```bash
-# Train the agent
-python mountain_car.py --train --episodes 5000
-
-# Render and visualize performance
-python mountain_car.py --render --episodes 10
+uv run main_frozen_lake.py [--train]
 ```
-
-### **Part 2: Frozen Lake**
-Run the Frozen Lake environment:
-
+- --train: Default to test and run for 1000 episodes, if specified, will train the agent with 15000 episodes.
+### Part 3: custom 2048 game environment with DQN agent
 ```bash
-python frozen_lake.py
+uv run main_2048.py [--train[TRAIN]] [--test[TEST]] [--random[RANDOM]] [--render [True|False]] [--plot]
 ```
-
-### **Part 3: OOP Project Environment**
-Execute the custom OOP environment:
-
-```bash
-python oop_project_env.py
-```
-
-**Tip:**  
-If you’re on Windows, replace  
-```bash
-source .venv/bin/activate
-```  
-with  
-```bash
-.venv\Scripts\activate
-```
+if no arguments are provided, both training and testing will be executed.
+- --train: Train the DQN agent for a specified number of steps (default: 32 million). If test is not specified, training will not run.
+- --test: Test the trained DQN agent for a specified number of episodes (default: 5). If train is not specified, testing will not run.
+- --random: Run a random agent for a specified number of episodes (default: 5). Training and testing will be skipped if this is specified.
+- --render: Render the environment during testing (default: True).
+- --plot: Plot the training scores after training (default: False).
