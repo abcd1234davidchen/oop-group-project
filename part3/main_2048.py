@@ -79,7 +79,6 @@ def train(envs, agent, total_steps, plot=False):
 
 def test(env, agent, episodes=5):
     # Testing loop
-    print(f"Starting testing for {episodes} episodes...")
     agent.epsilon = 0 # Turn off randomness
     
     for episode in range(episodes):
