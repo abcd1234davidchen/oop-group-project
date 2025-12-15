@@ -84,4 +84,4 @@ if __name__ == '__main__':
     if args.train:
         run(15000, is_training=True, render=False)
     else:
-        run(3000, is_training=False, render=False)
+        run(1000, is_training=False, render=False)

@@ -2,7 +2,7 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.registration import register
 import numpy as np
-import pygame # Re-added for graphics
+import pygame
 
 register(
     id='2048-v0',
@@ -10,16 +10,17 @@ register(
 )
 
 class TwentyFortyEightEnv(gym.Env):
+    '''Custom Gym Environment for 2048 Game'''
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
     def __init__(self, render_mode=None, size=4):
+        # Environment Setup
         self.size = size
         self.render_mode = render_mode
         self.action_space = spaces.Discrete(4)
         self.observation_space = spaces.Box(0, 65536, (size, size), dtype=np.int32)
         self.board = np.zeros((self.size, self.size), dtype=np.int32)
         
-        # --- Rendering Setup (From your original code) ---
         self.window_surface = None
         self.clock = None
         self.cell_size = 100
@@ -36,6 +37,7 @@ class TwentyFortyEightEnv(gym.Env):
         self.text_color_light = (249, 246, 242)
 
     def reset(self, seed=None, options=None):
+        # Reset the game state
         super().reset(seed=seed)
         self.board.fill(0)
         self._add_tile()
@@ -47,6 +49,7 @@ class TwentyFortyEightEnv(gym.Env):
         return self.board, {"action_mask": self._get_action_mask()}
 
     def step(self, action):
+        # A. Move Tiles
         rotated_board = np.rot90(self.board, k=action)
         new_board, reward = self._merge_left(rotated_board)
         self.board = np.rot90(new_board, k=-action)
@@ -54,23 +57,23 @@ class TwentyFortyEightEnv(gym.Env):
         if not np.array_equal(rotated_board, new_board):
             self._add_tile()
 
-        # 2. Rewards
+        # B. Rewards
         total_reward = float(reward)
         num_empty = len(self.board[self.board == 0])
         if num_empty < 4: total_reward -= 10.0
         if self._is_max_in_corner(): total_reward += 10.0
 
+        # C. Check Termination
         terminated = self._is_game_over()
         truncated = False
         
         info = {"max_tile": np.max(self.board), "action_mask": self._get_action_mask()}
-
         if self.render_mode == "human":
             self.render()
-
         return self.board, total_reward, terminated, truncated, info
 
     def _merge_left(self, board):
+        # Helper to merge tiles to the left
         new_board = np.zeros_like(board)
         total_score = 0
         for r in range(self.size):
@@ -93,6 +96,7 @@ class TwentyFortyEightEnv(gym.Env):
         return new_board, total_score
 
     def _add_tile(self):
+        # Add a new tile (2 or 4) to a random empty cell
         empty_cells = np.argwhere(self.board == 0)
         if len(empty_cells) > 0:
             idx = np.random.choice(len(empty_cells))
@@ -100,11 +104,13 @@ class TwentyFortyEightEnv(gym.Env):
             self.board[r, c] = 2 if np.random.random() < 0.9 else 4
 
     def _is_max_in_corner(self):
+        # Check if the maximum tile is in a corner
         max_val = np.max(self.board)
         corners = [self.board[0,0], self.board[0,3], self.board[3,0], self.board[3,3]]
         return max_val in corners
 
     def _get_action_mask(self):
+        # Generate action mask for valid moves
         mask = np.zeros(4, dtype=bool)
         for a in range(4):
             rot = np.rot90(self.board, k=a)
@@ -114,6 +120,7 @@ class TwentyFortyEightEnv(gym.Env):
         return mask
 
     def _is_game_over(self):
+        # Check if no moves are possible
         if np.any(self.board == 0): return False
         for r in range(4):
             for c in range(3):
@@ -123,8 +130,8 @@ class TwentyFortyEightEnv(gym.Env):
                 if self.board[r, c] == self.board[r+1, c]: return False
         return True
 
-    # --- GRAPHICS LOGIC RESTORED ---
     def _init_render(self):
+        # Initialize rendering
         if self.window_surface is None:
             pygame.init()
             pygame.display.init()
@@ -135,6 +142,7 @@ class TwentyFortyEightEnv(gym.Env):
             self.font = pygame.font.SysFont("Arial", 40, bold=True)
 
     def render(self):
+        # Render the current game state
         if self.render_mode != 'human': return
         if self.window_surface is None: self._init_render()
 
@@ -160,6 +168,7 @@ class TwentyFortyEightEnv(gym.Env):
             if event.type == pygame.QUIT: self.close()
 
     def close(self):
+        # Close rendering window
         if self.window_surface is not None:
             pygame.quit()
             self.window_surface = None
