@@ -94,7 +94,7 @@ def test(env, agent, episodes=5):
             total_reward += reward
             
             if env.render_mode == 'human':
-                time.sleep(0.05)
+                time.sleep(0.01)
         
         print(f"Test Episode {episode + 1}, Score: {total_reward:.1f}, Max Tile: {np.max(state)}")
 
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     # RANDOM: Default const = 5 episodes
     parser.add_argument('--random', nargs='?', const=5, default=None, type=int, help='Run random agent. Usage: --random (defaults to 5) or --random 10')
     
-    parser.add_argument('--render', type=bool, default=True)
+    parser.add_argument('--headless', action='store_true', help='Run in headless mode (no rendering during testing)')
     parser.add_argument('--plot', action='store_true', help='Plot training scores')
     args = parser.parse_args()
 
@@ -151,7 +151,7 @@ if __name__ == "__main__":
         episodes = args.test if args.test is not None else 5
         print(f"Testing for {episodes} episodes...")
 
-        env = gym.make('2048-v0', render_mode='human' if args.render else None)
+        env = gym.make('2048-v0', render_mode='human' if not args.headless else None)
         agent = agent_2048.DQNAgent(grid_size=4, action_space_n=env.action_space.n)
         
         try:

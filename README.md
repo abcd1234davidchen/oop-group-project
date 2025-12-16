@@ -44,13 +44,13 @@ uv run main_frozen_lake.py [--train]
 - --train: Default to test and run for 1000 episodes, if specified, will train the agent with 15000 episodes.
 ### Part 3: custom 2048 game environment with DQN agent
 ```bash
-uv run main_2048.py [--train[TRAIN]] [--test[TEST]] [--random[RANDOM]] [--render [True|False]] [--plot]
+uv run main_2048.py [--train[TRAIN]] [--test[TEST]] [--random[RANDOM]] [--headless] [--plot]
 ```
 if no arguments are provided, both training and testing will be executed.
 - --train: Train the DQN agent for a specified number of steps (default: 32 million). If test is not specified, training will not run.
 - --test: Test the trained DQN agent for a specified number of episodes (default: 5). If train is not specified, testing will not run.
 - --random: Run a random agent for a specified number of episodes (default: 5). Training and testing will be skipped if this is specified.
-- --render: Render the environment during testing (default: True).
+- --headless: Run in headless mode (no rendering during testing)
 - --plot: Plot the training scores after training (default: False).
 
 ## Contribution Table

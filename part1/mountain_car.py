@@ -92,4 +92,4 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    run(args.episodes, is_training=args.train, render=args.render)
+    run(1 if args.render else args.episodes, is_training=args.train, render=args.render)
